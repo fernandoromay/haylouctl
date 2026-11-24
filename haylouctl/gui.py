@@ -6,7 +6,8 @@ import subprocess
 import gi
 
 gi.require_version("Gtk", "4.0")
-from gi.repository import GLib, Gtk
+gi.require_version("GdkX11", "4.0")
+from gi.repository import GdkX11, GLib, Gtk
 
 from . import config
 
@@ -14,13 +15,62 @@ from . import config
 SERVICE_NAME = "haylouctl.service"
 
 
+def _query_frame_position(surface) -> tuple[int, int] | None:
+    """Absolute root position of the window frame, or None off X11."""
+    try:
+        import Xlib.display
+
+        xid = GdkX11.X11Surface.get_xid(surface)
+        display = Xlib.display.Display()
+        root = display.screen().root
+        window = display.create_resource_object("window", xid)
+        reply = root.translate_coords(window, 0, 0)
+        client_x, client_y = reply.x, reply.y
+        extents = window.get_full_property(
+            display.intern_atom("_NET_FRAME_EXTENTS"),
+            0,
+        )
+        left = top = 0
+        if extents is not None and len(extents.value) >= 3:
+            left, top = int(extents.value[0]), int(extents.value[2])
+        display.close()
+        return client_x - left, client_y - top
+    except Exception:
+        return None
+
+
+def _move_frame_to(surface, x: int, y: int) -> bool:
+    try:
+        import Xlib.display
+
+        xid = GdkX11.X11Surface.get_xid(surface)
+        display = Xlib.display.Display()
+        window = display.create_resource_object("window", xid)
+        window.configure(x=x, y=y)
+        display.sync()
+        display.close()
+        return True
+    except Exception:
+        return False
+
+
 class HaylouWindow(Gtk.ApplicationWindow):
     def __init__(self, application: Gtk.Application):
         super().__init__(application=application, title="Haylou Control")
-        self.set_default_size(520, 520)
-
         self.settings = config.load_config()
         self.last_service_state: str | None = None
+
+        window_geometry = self.settings.get("window") or {}
+        width = window_geometry.get("width")
+        height = window_geometry.get("height")
+        if width and height:
+            self.set_default_size(width, height)
+        else:
+            self.set_default_size(520, 520)
+
+        self.connect("map", self._on_map)
+        self.connect("unmap", self._on_unmap)
+        self.connect("close-request", self._on_close_request)
 
         self._build_interface()
         self._load_settings()
@@ -218,6 +268,48 @@ class HaylouWindow(Gtk.ApplicationWindow):
                 f"Could not save settings: {error}"
             )
             return False
+
+    def _on_map(self, *_args) -> None:
+        GLib.idle_add(self._restore_position)
+
+    def _on_unmap(self, *_args) -> None:
+        self._save_geometry()
+
+    def _on_close_request(self, *_args) -> bool:
+        self._save_geometry()
+        return False
+
+    def _restore_position(self) -> bool:
+        geometry = self.settings.get("window") or {}
+        x, y = geometry.get("x"), geometry.get("y")
+
+        if x is None or y is None:
+            return False
+
+        surface = self.get_surface()
+        if surface is not None:
+            _move_frame_to(surface, x, y)
+
+        return False
+
+    def _save_geometry(self) -> None:
+        surface = self.get_surface()
+        if surface is None or surface.is_destroyed():
+            return
+
+        position = _query_frame_position(surface)
+        width, height = self.get_width(), self.get_height()
+
+        if position is None or width <= 0 or height <= 0:
+            return
+
+        x, y = position
+        self.settings["window"] = {"x": x, "y": y, "width": width, "height": height}
+
+        try:
+            config.save_window_geometry(x, y, width, height)
+        except OSError:
+            pass
 
     def _systemctl(self, *arguments: str) -> subprocess.CompletedProcess:
         return subprocess.run(

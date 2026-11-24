@@ -19,6 +19,12 @@ DEFAULT_CONFIG = {
         "last": None,
         "auto-reconnect": True,
     },
+    "window": {
+        "x": None,
+        "y": None,
+        "width": None,
+        "height": None,
+    },
 }
 
 
@@ -90,6 +96,25 @@ def validate_config(config: dict) -> dict:
     if not isinstance(auto_reconnect, bool):
         raise ValueError("'devices.auto-reconnect' must be a boolean")
 
+    window = config.get("window")
+    if window is None:
+        window = {}
+    if not isinstance(window, dict):
+        raise ValueError("'window' must be a JSON object")
+
+    for key in ("x", "y", "width", "height"):
+        value = window.get(key)
+        if value is None:
+            window[key] = None
+            continue
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"'window.{key}' must be an integer or null")
+        window[key] = value
+
+    for key in ("width", "height"):
+        if window[key] is not None and window[key] <= 0:
+            raise ValueError(f"'window.{key}' must be a positive integer")
+
     notifications["dnd"] = dnd
     notifications["min-interval"] = float(min_interval)
     notifications["filter"] = [name.strip() for name in applications]
@@ -97,6 +122,7 @@ def validate_config(config: dict) -> dict:
     devices["paired"] = paired
     devices["last"] = last_device
     devices["auto-reconnect"] = auto_reconnect
+    config["window"] = window
 
     return config
 
@@ -154,6 +180,12 @@ def save_config(config: dict) -> None:
 def save_last_device(address: str) -> None:
     config = load_config()
     config["devices"]["last"] = address
+    save_config(config)
+
+
+def save_window_geometry(x: int, y: int, width: int, height: int) -> None:
+    config = load_config()
+    config["window"] = {"x": x, "y": y, "width": width, "height": height}
     save_config(config)
 
 
