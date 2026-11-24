@@ -9,6 +9,11 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 
+# dbus-monitor does not escape quotes inside strings, so a body containing
+# '"' (e.g. <a href="...">) gets truncated at parse time. href tags are
+# rare in desktop notifications (~1-5%); accepted limitation. A future
+# agent wanting full fidelity should parse via dbus-next instead of
+# scraping dbus-monitor text.
 STRING_PATTERN = re.compile(r'\bstring\s+("(?:\\.|[^"\\])*")')
 EXPIRE_PATTERN = re.compile(r"^\s*int32\s+-?\d+\s*$")
 BREAK_PATTERN = re.compile(
