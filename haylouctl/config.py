@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 
-CONFIG_PATH = Path.home() / ".config" / "haylou-notify" / "config.json"
+CONFIG_PATH = Path.home() / ".config" / "haylouctl" / "config.json"
 
 DEFAULT_CONFIG = {
     "notifications": {

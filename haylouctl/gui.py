@@ -11,12 +11,12 @@ from gi.repository import GLib, Gtk
 from . import config
 
 
-SERVICE_NAME = "haylou-notify.service"
+SERVICE_NAME = "haylouctl.service"
 
 
 class HaylouWindow(Gtk.ApplicationWindow):
     def __init__(self, application: Gtk.Application):
-        super().__init__(application=application, title="Haylou Notify")
+        super().__init__(application=application, title="Haylou Control")
         self.set_default_size(520, 520)
 
         self.settings = config.load_config()
@@ -39,7 +39,7 @@ class HaylouWindow(Gtk.ApplicationWindow):
         root.set_margin_end(20)
         self.set_child(root)
 
-        heading = Gtk.Label(label="Haylou Notify")
+        heading = Gtk.Label(label="Haylou Control")
         heading.set_xalign(0)
         heading.add_css_class("title-1")
         root.append(heading)
@@ -336,7 +336,7 @@ class HaylouWindow(Gtk.ApplicationWindow):
 
 class HaylouApplication(Gtk.Application):
     def __init__(self):
-        super().__init__(application_id="com.haylou.Notify")
+        super().__init__(application_id="com.haylou.Control")
 
     def do_activate(self) -> None:
         window = self.props.active_window

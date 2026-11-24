@@ -1,4 +1,0 @@
-#!/bin/sh
-SELF=$(readlink -f "$0")
-ROOT=$(dirname -- "$SELF")
-PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m haylou_notify "$@"

@@ -2,8 +2,8 @@
 """REFERENCE: Haylou Solar Plus (RT3/LS16) notification push, legacy Huawo 0x79 protocol.
 
 Unified from the three working test scripts (v1, v2, batch) and matching the
-production builders in tools/haylou_desktop_bridge.py and
-haylou_notify/transport.py. This is the authoritative description of how a
+production builders in reference/desktop_bridge.py and
+haylouctl/transport.py. This is the authoritative description of how a
 notification frame is built and delivered.
 
 =============================================================================
@@ -67,10 +67,10 @@ subscribe to 8002 and read the watch's asynchronous reply.
 =============================================================================
 5. Usage
 =============================================================================
-  python3 tools/test_solar_plus_notification.py \
+  python3 reference/solar_plus.py \
       --title "Linux test" --content "Hello" --type 2
 
-  python3 tools/test_solar_plus_notification.py --batch
+  python3 reference/solar_plus.py --batch
       # sends one push of each SocialType: SMS, Social, Email, Calendar
 """
 
@@ -125,8 +125,8 @@ def build_frame(
     """Build a 0x79 legacy notification frame (see module docstring).
 
     This is byte-for-byte the same builder as production
-    (tools/haylou_desktop_bridge.build_notification_frame and
-    haylou_notify/transport.build_solar_packet).
+    (reference/desktop_bridge.build_notification_frame and
+    haylouctl/transport.build_solar_packet).
     """
     if message_type not in SOCIAL_TYPES:
         raise ValueError("message_type must be 1 (SMS), 2 (Social), 3 (Email) or 4 (Calendar)")

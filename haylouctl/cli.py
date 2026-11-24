@@ -136,7 +136,7 @@ def cmd_gui(_args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="haylou-notify")
+    parser = argparse.ArgumentParser(prog="haylouctl")
     sub = parser.add_subparsers(dest="command", required=True)
 
     scan = sub.add_parser("scan", help="list advertising BLE devices")
