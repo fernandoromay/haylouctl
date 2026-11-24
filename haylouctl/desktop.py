@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import html
 import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -10,6 +11,23 @@ from dataclasses import dataclass
 
 STRING_PATTERN = re.compile(r'\bstring\s+("(?:\\.|[^"\\])*")')
 EXPIRE_PATTERN = re.compile(r"^\s*int32\s+-?\d+\s*$")
+BREAK_PATTERN = re.compile(
+    r"<(?:br|/p|/div|/li|/h[1-6]|/tr)\s*/?>",
+    re.IGNORECASE,
+)
+TAG_PATTERN = re.compile(r"<[^>]+>")
+
+
+def strip_markup(text: str) -> str:
+    """Reduce a freedesktop notification body to plain text.
+
+    The watch renders plain text only, so HTML tags are dropped and
+    entities are unescaped. Tags are stripped before unescaping so a
+    literal "&lt;b&gt;" survives as "<b>".
+    """
+    text = BREAK_PATTERN.sub("\n", text)
+    text = TAG_PATTERN.sub("", text)
+    return html.unescape(text).strip()
 
 
 @dataclass(frozen=True)
@@ -56,6 +74,9 @@ def parse_notify_call(block: list[str]) -> DesktopNotification | None:
         return None
 
     app_name, _app_icon, title, body = values[:4]
+
+    title = strip_markup(title)
+    body = strip_markup(body)
 
     if not title and not body:
         return None
