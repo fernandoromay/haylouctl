@@ -1,0 +1,252 @@
+
+from __future__ import annotations
+
+import asyncio
+import struct
+import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, suppress
+from dataclasses import dataclass, field
+from datetime import datetime
+
+from bleak import BleakClient, BleakScanner
+from bleak.backends.characteristic import BleakGATTCharacteristic
+
+NAME_HINTS = ("haylou", "solar")
+CONNECT_TIMEOUT = 20.0
+
+SOLAR_SERVICE = "00006006-0000-1000-8000-00805f9b34fb"
+SOLAR_WRITE = "00008001-0000-1000-8000-00805f9b34fb"
+SOLAR_ACK = "00008002-0000-1000-8000-00805f9b34fb"
+
+SOLAR_ACK_PACKET = bytes.fromhex("6f 01 81 02 00 79 00 8f")
+
+
+@dataclass(frozen=True)
+class Advertisement:
+    address: str
+    name: str
+    rssi: int
+    manufacturer: dict[int, bytes] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Characteristic:
+    uuid: str
+    properties: tuple[str, ...]
+    value: str | None = None
+
+
+@dataclass(frozen=True)
+class Service:
+    uuid: str
+    characteristics: tuple[Characteristic, ...]
+
+
+@dataclass(frozen=True)
+class GattTable:
+    address: str
+    services: tuple[Service, ...]
+
+    def uuids(self) -> set[str]:
+        found = {service.uuid for service in self.services}
+        for service in self.services:
+            found.update(char.uuid for char in service.characteristics)
+        return found
+
+
+def looks_like_haylou(name: str) -> bool:
+    lowered = name.lower()
+    return any(hint in lowered for hint in NAME_HINTS)
+
+
+async def scan(seconds: float = 10.0) -> list[Advertisement]:
+    found = await BleakScanner.discover(timeout=seconds, return_adv=True)
+    rows: list[Advertisement] = []
+
+    for device, advert in found.values():
+        rows.append(
+            Advertisement(
+                address=device.address,
+                name=advert.local_name or device.name or "?",
+                rssi=advert.rssi,
+                manufacturer=dict(advert.manufacturer_data),
+            )
+        )
+
+    rows.sort(key=lambda row: -row.rssi)
+    return rows
+
+
+async def find_haylou(seconds: float = 15.0) -> Advertisement | None:
+    rows = await scan(seconds)
+    for row in rows:
+        if looks_like_haylou(row.name):
+            return row
+    return None
+
+
+async def survey(address: str, read: bool = True) -> GattTable:
+    async with BleakClient(address, timeout=CONNECT_TIMEOUT) as client:
+        services: list[Service] = []
+
+        for service in client.services:
+            characteristics: list[Characteristic] = []
+
+            for char in service.characteristics:
+                value: str | None = None
+
+                if read and "read" in char.properties:
+                    try:
+                        raw = await client.read_gatt_char(char)
+                        value = raw.hex(" ")
+                    except Exception:
+                        value = None
+
+                characteristics.append(
+                    Characteristic(char.uuid, tuple(char.properties), value)
+                )
+
+            services.append(Service(service.uuid, tuple(characteristics)))
+
+        return GattTable(address=address, services=tuple(services))
+
+
+def _solar_tlv(tag: int, value: str) -> bytes:
+    encoded = value.encode("utf-8")
+    length = len(encoded) + 1
+
+    if length > 0xFFFF:
+        raise ValueError("notification field is too long")
+
+    return struct.pack("<H", length) + bytes((tag,)) + encoded
+
+
+def build_solar_packet(
+    title: str,
+    content: str,
+    message_type: int = 2,
+    message_id: int | None = None,
+    timestamp: datetime | None = None,
+) -> bytes:
+    if message_type not in (1, 2, 3, 4):
+        raise ValueError("message_type must be 1, 2, 3, or 4")
+
+    if message_id is None:
+        message_id = int(time.time())
+
+    if not 0 <= message_id <= 0xFFFFFFFF:
+        raise ValueError("message_id must fit in 4 bytes")
+
+    timestamp = timestamp or datetime.now()
+    timestamp_text = timestamp.strftime("%Y%m%dT%H%M%S")
+
+    fields = (
+        _solar_tlv(2, title)
+        + _solar_tlv(3, content)
+        + _solar_tlv(4, timestamp_text)
+    )
+
+    inner_length = 12 + len(fields)
+    body_length = inner_length + 2
+
+    if body_length > 0xFFFF:
+        raise ValueError("notification packet is too large")
+
+    body = (
+        struct.pack("<H", inner_length)
+        + struct.pack("<I", message_id)
+        + b"\x00"
+        + bytes((0x02, 0x00, 0x01, message_type))
+        + fields
+        + b"\x00\x00\x00"
+    )
+
+    return (
+        b"\x6f\x79\x71"
+        + struct.pack("<H", body_length)
+        + body
+        + b"\x8f"
+    )
+
+
+@asynccontextmanager
+async def solar_connection(
+    address: str,
+    disconnected_event: asyncio.Event | None = None,
+) -> AsyncIterator[tuple[BleakClient, BleakGATTCharacteristic]]:
+    """
+    Connect to the Solar-compatible device and validate its notification GATT.
+
+    If supplied, disconnected_event is set by Bleak when the connection drops.
+    """
+    if disconnected_event is not None:
+        disconnected_event.clear()
+
+    def on_disconnect(_client: BleakClient) -> None:
+        if disconnected_event is not None:
+            disconnected_event.set()
+
+    async with BleakClient(
+        address,
+        timeout=CONNECT_TIMEOUT,
+        disconnected_callback=on_disconnect,
+    ) as client:
+        service = client.services.get_service(SOLAR_SERVICE)
+
+        if service is None:
+            raise RuntimeError(f"Solar service not found: {SOLAR_SERVICE}")
+
+        write_char = service.get_characteristic(SOLAR_WRITE)
+        ack_char = service.get_characteristic(SOLAR_ACK)
+
+        if write_char is None or ack_char is None:
+            raise RuntimeError("Solar notification characteristics are missing")
+
+        if "write-without-response" not in write_char.properties:
+            raise RuntimeError("8001 does not support write-without-response")
+
+        if "notify" not in ack_char.properties:
+            raise RuntimeError("8002 does not support notifications")
+
+        def on_ack(_sender: int, data: bytearray) -> None:
+            # 8002 is notify-only. Never write to this characteristic.
+            if bytes(data) == SOLAR_ACK_PACKET:
+                return
+
+        await client.start_notify(ack_char, on_ack)
+
+        try:
+            if not client.is_connected:
+                raise RuntimeError("BLE disconnected while enabling notifications")
+
+            if disconnected_event is not None and disconnected_event.is_set():
+                raise RuntimeError("BLE disconnected while enabling notifications")
+
+            yield client, write_char
+
+        finally:
+            if client.is_connected:
+                with suppress(Exception):
+                    await client.stop_notify(ack_char)
+
+
+async def send_solar_notification(
+    client: BleakClient,
+    write_char: BleakGATTCharacteristic,
+    title: str,
+    content: str,
+    message_type: int = 2,
+    message_id: int | None = None,
+) -> None:
+    if not client.is_connected:
+        raise RuntimeError("BLE device is not connected")
+
+    packet = build_solar_packet(
+        title=title,
+        content=content,
+        message_type=message_type,
+        message_id=message_id,
+    )
+
+    await client.write_gatt_char(write_char, packet, response=False)
