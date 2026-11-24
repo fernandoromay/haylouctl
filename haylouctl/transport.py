@@ -1,4 +1,37 @@
 
+"""BLE transport: device discovery, GATT survey, and Solar notification pushes.
+
+Device detection scans for advertisements whose name contains "haylou" or
+"solar". survey() connects, reads every readable characteristic and returns
+the full GATT table for layout classification (see layout.py).
+
+Notification path (Solar/Appscomm stack, details in reference/solar_plus.py):
+  service 0x6006
+    8001  write-without-response   command channel (frames are written here)
+    8002  notify                   async acks from the watch; NEVER write to it
+    8003  write-without-response   reply-only, unused
+    8004  notify                   async pushes, unused
+
+solar_connection() is the context manager used by the bridge: it connects
+(20 s timeout), validates 6006/8001/8002, subscribes to 8002 and yields
+(client, write_char). An optional disconnected_event is set by bleak when
+the link drops so the send loop can react immediately.
+
+build_solar_packet() encodes the legacy 0x79 frame:
+  6F 79 71 | len(2,LE) | body | 8F
+  body = inner_len(2,LE) | message_id(4,LE) | 00 | 02 00 01 <type>
+         | title TLV | content TLV | time TLV | 00 00 00
+  TLV  = len(2,LE counts tag+data) | tag | data
+         tags: 02 title, 03 content, 04 timestamp (%Y%m%dT%H%M%S local)
+  limits: title <=90, content <=357 UTF-8 bytes, truncated on a character
+  boundary exactly like the Haylou Fun SDK.
+  SocialType: 1 SMS, 2 Social, 3 Email, 4 Calendar (default 2).
+
+Frames are written with response=False (write-without-response); the watch
+acknowledges asynchronously on 8002. The early experiments sent a 0x03
+"kick" to 8002 — that is wrong, 8002 is notify-only.
+"""
+
 from __future__ import annotations
 
 import asyncio

@@ -1,5 +1,16 @@
 #!/bin/sh
-# Install haylouctl: launcher symlink, systemd user unit, desktop entry.
+# Install haylouctl for the current user — no root needed.
+#   1. symlink bin/haylouctl -> ~/.local/bin/haylouctl
+#   2. render assets/haylouctl.service   -> ~/.config/systemd/user/
+#      (@REPO@ replaced with the absolute repo path, so the unit survives
+#       no matter where the repo lives; re-run after moving it)
+#   3. render assets/haylouctl.desktop   -> ~/.local/share/applications/
+#      (@BIN@ replaced with ~/.local/bin)
+#   4. daemon-reload, enable --now haylouctl.service,
+#      update-desktop-database
+#
+# Uninstall: systemctl --user disable --now haylouctl.service, then delete
+# the three installed files above.
 set -eu
 
 REPO=$(CDPATH= cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd)

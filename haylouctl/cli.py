@@ -1,4 +1,19 @@
 
+"""Command line interface: scan, survey, bridge, gui (prog: haylouctl).
+
+  scan     list advertising BLE devices sorted by RSSI; marks names that
+           look like a Haylou/Solar.
+  survey   connect to a watch (given MAC or auto-detected), dump the GATT
+           table and classify the layout; exit 2 if unknown.
+  bridge   run the notification daemon — the entry point used by
+           systemd's haylouctl.service. Address resolution order:
+           argument, config devices.last, then a fresh scan.
+  gui      open the GTK4 settings window (needs GTK4 bindings).
+
+bridge argument validation (min-interval >= 0, 0 < reconnect-delay <=
+max-reconnect-delay) happens before anything touches BLE.
+"""
+
 from __future__ import annotations
 
 import argparse

@@ -1,4 +1,25 @@
 
+"""GTK4 settings window that controls haylouctl.service.
+
+Layout: device dropdown, notifications (DND, minimum interval, blocked
+apps), connection (auto-reconnect), Save + Start/Stop buttons, and a live
+status label. Service state is polled from `systemctl --user show
+--property=ActiveState` every 1.5 s; the start button toggles the unit
+with --no-block after saving settings first.
+
+Window geometry persistence (GTK4 has no move()/get_position(); this is
+X11-only via python-xlib, best-effort):
+  restore  on map: set_default_size() for the size, then an idle callback
+           moves the frame with an X configure request — under muffin a
+           configure request on the client window lands the frame at the
+           requested coordinates (configuring the frame parent is ignored).
+  save     on close-request and unmap: absolute frame position from
+           translate_coords minus _NET_FRAME_EXTENTS (left/top), plus the
+           allocated size; written to the config "window" section.
+  fallback every xlib call swallows exceptions: if python-xlib or X11 is
+           unavailable (e.g. Wayland) only the size is restored.
+"""
+
 from __future__ import annotations
 
 import subprocess

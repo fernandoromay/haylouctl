@@ -1,3 +1,19 @@
+"""GATT layout classification for `haylouctl survey`.
+
+Three known BLE stacks found on the watches this project probes:
+
+  SOLAR  Appscomm/Huawo stack: service 0x6006 with characteristics
+         0x8001-0x8004. Haylou Solar Plus (RT3/LS16) and clones. The only
+         stack with a working notification path here — everything else in
+         this package targets it (protocol: reference/solar_plus.py).
+  RT     ZeTime-style stack: service 0xfee7 or command 0x02ff.
+  YOUCY  service 0x60ff or command 0x6001.
+
+classify() checks SOLAR first (it needs both the service and at least one
+channel), then RT, then YOUCY, else UNKNOWN. describe() renders the survey
+GATT table plus the detected layout as text; cli exits 2 on UNKNOWN.
+"""
+
 from __future__ import annotations
 
 from enum import Enum

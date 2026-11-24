@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Forward Linux desktop notifications to a Haylou Solar Plus over BLE.
+"""REFERENCE (historical): standalone desktop->watch bridge.
+
+This is the original single-file bridge the haylouctl package was built
+from, kept as a reference implementation: it contains the first working
+dbus-monitor scraping and the 0x79 frame builder that production now
+lives in haylouctl/desktop.py and haylouctl/transport.py. Not installed,
+not maintained — read it to see where the package came from.
 
 Requires: bleak, dbus-monitor, and a running desktop session bus.
 """

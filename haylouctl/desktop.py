@@ -1,4 +1,28 @@
 
+"""Desktop notification capture from the session bus.
+
+notification_stream() spawns `dbus-monitor --session` filtered to
+org.freedesktop.Notifications.Notify method calls and scrapes its text
+output: each call arrives as a block of `type value` lines terminated by
+the int32 expire_timeout line. parse_notify_call() pulls out the four
+strings (app_name, app_icon, summary, body) via STRING_PATTERN.
+
+Known limitation: dbus-monitor does not escape quotes inside strings, so a
+body containing '"' (e.g. <a href="...">) is truncated at parse time.
+href tags are rare in desktop notifications (~1-5%); accepted. A future
+agent wanting full fidelity should parse via dbus-next instead of
+scraping dbus-monitor text.
+
+strip_markup() reduces freedesktop HTML to the plain text the watch can
+render: <br>/block tags become newlines, remaining tags are dropped,
+entities are unescaped AFTER stripping so a literal "&lt;b&gt;" survives
+as "<b>". Applied to title and body at parse time, so logs and the watch
+both see clean text.
+
+collect_notifications() is the queue feeder: it drops filtered apps
+(app name match, casefolded) and everything while DND is on, then queues.
+"""
+
 from __future__ import annotations
 
 import ast

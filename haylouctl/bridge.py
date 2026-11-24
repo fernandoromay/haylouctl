@@ -1,4 +1,24 @@
 
+"""Bridge core: desktop notification queue -> BLE sender with reconnection.
+
+forward_notifications() wires the two long-running tasks:
+
+  collector  desktop.collect_notifications() parses dbus-monitor output,
+             applies the blocked-app filter and DND, pushes
+             DesktopNotification items onto the queue.
+  sender     _send_loop() owns the BLE link: opens transport.solar_connection,
+             pulls from the queue, enforces min_interval between pushes
+             (a pending notification survives reconnects), and sends via
+             transport.send_solar_notification().
+
+Reconnect policy: exponential backoff from reconnect_delay, doubling up to
+max_reconnect_delay, forever when auto_reconnect is on (device settings).
+On the first successful connect save_last_device() records the address and
+the delay resets. With auto_reconnect off the loop returns after the first
+drop. Every state change goes to status_callback (and stdout) as a single
+line: BLE CONNECTED / SENDING / SENT / DISCONNECTED / RECONNECT ...
+"""
+
 from __future__ import annotations
 
 import asyncio

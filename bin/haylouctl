@@ -1,4 +1,7 @@
 #!/bin/sh
+# Launcher: resolves the repo root from its own location (works through
+# the ~/.local/bin symlink install.sh creates), puts the root on
+# PYTHONPATH and runs the haylouctl package.
 SELF=$(readlink -f "$0")
 ROOT=$(CDPATH= cd -- "$(dirname -- "$SELF")/.." && pwd)
 PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m haylouctl "$@"

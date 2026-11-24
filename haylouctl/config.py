@@ -1,4 +1,24 @@
 
+"""Configuration store at ~/.config/haylouctl/config.json.
+
+Schema (DEFAULT_CONFIG is the source of truth):
+  notifications.dnd           bool    silence everything
+  notifications.min-interval  float   minimum seconds between watch pushes
+  notifications.filter        list    blocked application names (casefolded
+                                      match against app_name)
+  devices.paired              list    {address, model, name} entries for the
+                                      GUI dropdown
+  devices.last                str|null MAC of the device to reconnect to
+  devices.auto-reconnect      bool    keep retrying after a BLE drop
+  window.x/y/width/height     int|null GUI geometry; nulls until the window
+                                      is closed once (see gui.py)
+
+load_config() creates the file with defaults on first run, merges missing
+keys into older files, then validates and normalizes types. save_config()
+validates and writes atomically (tmp file + os.replace). save_last_device()
+and save_window_geometry() are small helpers used by the bridge and GUI.
+"""
+
 from __future__ import annotations
 
 import json
