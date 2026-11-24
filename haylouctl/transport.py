@@ -112,14 +112,24 @@ async def survey(address: str, read: bool = True) -> GattTable:
         return GattTable(address=address, services=tuple(services))
 
 
-def _solar_tlv(tag: int, value: str) -> bytes:
+TITLE_LIMIT = 90
+CONTENT_LIMIT = 357
+
+
+def _utf8_limit(value: str, max_bytes: int) -> bytes:
     encoded = value.encode("utf-8")
-    length = len(encoded) + 1
+    if len(encoded) <= max_bytes:
+        return encoded
+    return encoded[:max_bytes].decode("utf-8", "ignore").encode("utf-8")
+
+
+def _solar_tlv(tag: int, value: bytes) -> bytes:
+    length = len(value) + 1
 
     if length > 0xFFFF:
         raise ValueError("notification field is too long")
 
-    return struct.pack("<H", length) + bytes((tag,)) + encoded
+    return struct.pack("<H", length) + bytes((tag,)) + value
 
 
 def build_solar_packet(
@@ -142,9 +152,9 @@ def build_solar_packet(
     timestamp_text = timestamp.strftime("%Y%m%dT%H%M%S")
 
     fields = (
-        _solar_tlv(2, title)
-        + _solar_tlv(3, content)
-        + _solar_tlv(4, timestamp_text)
+        _solar_tlv(2, _utf8_limit(title, TITLE_LIMIT))
+        + _solar_tlv(3, _utf8_limit(content, CONTENT_LIMIT))
+        + _solar_tlv(4, timestamp_text.encode("utf-8"))
     )
 
     inner_length = 12 + len(fields)
