@@ -1,33 +1,40 @@
 #!/bin/sh
 # Install haylouctl for the current user — no root needed.
-#   1. symlink bin/haylouctl -> ~/.local/bin/haylouctl
-#   2. render assets/haylouctl.service   -> ~/.config/systemd/user/
-#      (@REPO@ replaced with the absolute repo path, so the unit survives
-#       no matter where the repo lives; re-run after moving it)
-#   3. render assets/haylouctl.desktop   -> ~/.local/share/applications/
+#   1. copy bin/haylouctl + haylouctl/ package -> ~/.local/share/haylouctl/
+#      (re-run to update; the repo can be removed afterwards)
+#   2. symlink the installed launcher -> ~/.local/bin/haylouctl
+#   3. render assets/haylouctl.service   -> ~/.config/systemd/user/
+#      (@INSTALL@ replaced with the install dir)
+#   4. render assets/haylouctl.desktop   -> ~/.local/share/applications/
 #      (@BIN@ replaced with ~/.local/bin)
-#   4. copy assets/haylouctl.svg         -> hicolor scalable icon dir
-#   5. daemon-reload, enable --now haylouctl.service,
+#   5. copy assets/haylouctl.svg         -> hicolor scalable icon dir
+#   6. daemon-reload, enable --now haylouctl.service,
 #      update-desktop-database, gtk-update-icon-cache
 #
 # Uninstall: systemctl --user disable --now haylouctl.service, then delete
-# the four installed files above.
+# ~/.local/share/haylouctl, the unit, the desktop entry and the icon.
 set -eu
 
 REPO=$(CDPATH= cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd)
+INSTALL_DIR="$HOME/.local/share/haylouctl"
 BIN_DIR="$HOME/.local/bin"
 UNIT_DIR="$HOME/.config/systemd/user"
 APP_DIR="$HOME/.local/share/applications"
 ICON_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"
 UNIT="haylouctl.service"
 
-mkdir -p "$BIN_DIR" "$UNIT_DIR" "$APP_DIR" "$ICON_DIR"
+mkdir -p "$INSTALL_DIR/bin" "$BIN_DIR" "$UNIT_DIR" "$APP_DIR" "$ICON_DIR"
 
-chmod +x "$REPO/bin/haylouctl"
-ln -sfn "$REPO/bin/haylouctl" "$BIN_DIR/haylouctl"
+rm -rf "$INSTALL_DIR/haylouctl"
+cp -R "$REPO/haylouctl" "$INSTALL_DIR/haylouctl"
+find "$INSTALL_DIR/haylouctl" -type d -name __pycache__ -exec rm -rf {} +
 
-sed "s|@REPO@|$REPO|g" "$REPO/assets/haylouctl.service" > "$UNIT_DIR/$UNIT"
-sed -e "s|@REPO@|$REPO|g" -e "s|@BIN@|$BIN_DIR|g" \
+install -m 755 "$REPO/bin/haylouctl" "$INSTALL_DIR/bin/haylouctl"
+ln -sfn "$INSTALL_DIR/bin/haylouctl" "$BIN_DIR/haylouctl"
+
+sed "s|@INSTALL@|$INSTALL_DIR|g" "$REPO/assets/haylouctl.service" \
+    > "$UNIT_DIR/$UNIT"
+sed -e "s|@INSTALL@|$INSTALL_DIR|g" -e "s|@BIN@|$BIN_DIR|g" \
     "$REPO/assets/haylouctl.desktop" > "$APP_DIR/haylouctl.desktop"
 
 install -m 644 "$REPO/assets/haylouctl.svg" "$ICON_DIR/haylouctl.svg"
@@ -44,6 +51,7 @@ if command -v gtk-update-icon-cache >/dev/null 2>&1; then
 fi
 
 echo "installed:"
+echo "  $INSTALL_DIR"
 echo "  $BIN_DIR/haylouctl"
 echo "  $UNIT_DIR/$UNIT"
 echo "  $APP_DIR/haylouctl.desktop"
