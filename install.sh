@@ -6,20 +6,22 @@
 #       no matter where the repo lives; re-run after moving it)
 #   3. render assets/haylouctl.desktop   -> ~/.local/share/applications/
 #      (@BIN@ replaced with ~/.local/bin)
-#   4. daemon-reload, enable --now haylouctl.service,
-#      update-desktop-database
+#   4. copy assets/haylouctl.svg         -> hicolor scalable icon dir
+#   5. daemon-reload, enable --now haylouctl.service,
+#      update-desktop-database, gtk-update-icon-cache
 #
 # Uninstall: systemctl --user disable --now haylouctl.service, then delete
-# the three installed files above.
+# the four installed files above.
 set -eu
 
 REPO=$(CDPATH= cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd)
 BIN_DIR="$HOME/.local/bin"
 UNIT_DIR="$HOME/.config/systemd/user"
 APP_DIR="$HOME/.local/share/applications"
+ICON_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"
 UNIT="haylouctl.service"
 
-mkdir -p "$BIN_DIR" "$UNIT_DIR" "$APP_DIR"
+mkdir -p "$BIN_DIR" "$UNIT_DIR" "$APP_DIR" "$ICON_DIR"
 
 chmod +x "$REPO/bin/haylouctl"
 ln -sfn "$REPO/bin/haylouctl" "$BIN_DIR/haylouctl"
@@ -28,6 +30,8 @@ sed "s|@REPO@|$REPO|g" "$REPO/assets/haylouctl.service" > "$UNIT_DIR/$UNIT"
 sed -e "s|@REPO@|$REPO|g" -e "s|@BIN@|$BIN_DIR|g" \
     "$REPO/assets/haylouctl.desktop" > "$APP_DIR/haylouctl.desktop"
 
+install -m 644 "$REPO/assets/haylouctl.svg" "$ICON_DIR/haylouctl.svg"
+
 systemctl --user daemon-reload
 systemctl --user enable --now "$UNIT"
 
@@ -35,7 +39,12 @@ if command -v update-desktop-database >/dev/null 2>&1; then
     update-desktop-database "$APP_DIR"
 fi
 
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+fi
+
 echo "installed:"
 echo "  $BIN_DIR/haylouctl"
 echo "  $UNIT_DIR/$UNIT"
 echo "  $APP_DIR/haylouctl.desktop"
+echo "  $ICON_DIR/haylouctl.svg"
