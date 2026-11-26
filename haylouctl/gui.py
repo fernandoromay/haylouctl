@@ -1,9 +1,18 @@
 
 """GTK4 settings window that controls haylouctl.service.
 
-Layout: device dropdown, notifications (DND, minimum interval, blocked
-apps), connection (auto-reconnect), Save + Start/Stop buttons, and a live
-status label. Service state is polled from `systemctl --user show
+Two views swapped on a Gtk.Stack:
+  empty   no devices.paired — centered "No device yet" + Pair button
+  form    device dropdown (+ pair button), notifications (DND, minimum
+          interval, blocked apps), connection (auto-reconnect), Save +
+          Start/Stop buttons, and a live status label.
+
+PairDialog scans for Haylou devices on a background thread (results
+delivered via GLib.idle_add), lets the user pick one and set a name,
+then saves via config.save_paired_device. The caller reloads settings
+so the new device is auto-selected.
+
+Service state is polled from `systemctl --user show
 --property=ActiveState` every 1.5 s; the start button toggles the unit
 with --no-block after saving settings first.
 
@@ -22,7 +31,9 @@ X11-only via python-xlib, best-effort):
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
+import threading
 
 import gi
 
@@ -30,7 +41,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("GdkX11", "4.0")
 from gi.repository import GdkX11, GLib, Gtk
 
-from . import config
+from . import config, transport
 
 
 SERVICE_NAME = "haylouctl.service"
@@ -100,6 +111,33 @@ class HaylouWindow(Gtk.ApplicationWindow):
         self._poll_service_status()
 
     def _build_interface(self) -> None:
+        self.stack = Gtk.Stack()
+        self.stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        self.set_child(self.stack)
+
+        self.stack.add_named(self._build_empty_state(), "empty")
+        self.stack.add_named(self._build_form(), "form")
+
+    def _build_empty_state(self) -> Gtk.Widget:
+        box = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=16,
+            halign=Gtk.Align.CENTER,
+            valign=Gtk.Align.CENTER,
+        )
+
+        label = Gtk.Label(label="No device yet")
+        label.add_css_class("title-2")
+        box.append(label)
+
+        self.pair_button = Gtk.Button(label="Pair a device")
+        self.pair_button.add_css_class("suggested-action")
+        self.pair_button.connect("clicked", self._open_pair_dialog)
+        box.append(self.pair_button)
+
+        return box
+
+    def _build_form(self) -> Gtk.Widget:
         root = Gtk.Box(
             orientation=Gtk.Orientation.VERTICAL,
             spacing=16,
@@ -108,21 +146,28 @@ class HaylouWindow(Gtk.ApplicationWindow):
         root.set_margin_bottom(20)
         root.set_margin_start(20)
         root.set_margin_end(20)
-        self.set_child(root)
-
-        heading = Gtk.Label(label="Haylou Control")
-        heading.set_xalign(0)
-        heading.add_css_class("title-1")
-        root.append(heading)
 
         device_heading = Gtk.Label(label="Device")
         device_heading.set_xalign(0)
         device_heading.add_css_class("heading")
         root.append(device_heading)
 
+        device_row = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=8,
+        )
+
         self.device_model = Gtk.StringList.new([])
         self.device_dropdown = Gtk.DropDown.new(self.device_model, None)
-        root.append(self.device_dropdown)
+        self.device_dropdown.set_hexpand(True)
+        device_row.append(self.device_dropdown)
+
+        self.add_device_button = Gtk.Button(label="+")
+        self.add_device_button.set_tooltip_text("Pair another device")
+        self.add_device_button.connect("clicked", self._open_pair_dialog)
+        device_row.append(self.add_device_button)
+
+        root.append(device_row)
 
         notification_heading = Gtk.Label(label="Notifications")
         notification_heading.set_xalign(0)
@@ -204,6 +249,8 @@ class HaylouWindow(Gtk.ApplicationWindow):
         self.status_label.set_selectable(True)
         root.append(self.status_label)
 
+        return root
+
     def _load_settings(self) -> None:
         notifications = self.settings["notifications"]
         devices = self.settings["devices"]
@@ -225,6 +272,12 @@ class HaylouWindow(Gtk.ApplicationWindow):
 
         self.devices = paired
 
+        if not paired:
+            self.stack.set_visible_child_name("empty")
+            return
+
+        self.stack.set_visible_child_name("form")
+
         self.device_model.splice(
             0,
             self.device_model.get_n_items(),
@@ -242,14 +295,8 @@ class HaylouWindow(Gtk.ApplicationWindow):
                     selected = index
                     break
 
-        if paired:
-            self.device_dropdown.set_selected(selected)
-        else:
-            self.device_dropdown.set_sensitive(False)
-            self.start_button.set_sensitive(False)
-            self.status_label.set_text(
-                "No configured device. Add a paired device to config.json first."
-            )
+        self.device_dropdown.set_sensitive(True)
+        self.device_dropdown.set_selected(selected)
 
     def _save_settings(self, _button: Gtk.Button | None = None) -> bool:
         try:
@@ -445,6 +492,223 @@ class HaylouWindow(Gtk.ApplicationWindow):
             self.status_label.set_text(
                 f"Systemd command failed: {error}"
             )
+
+    def _open_pair_dialog(self, _button: Gtk.Button) -> None:
+        dialog = PairDialog(self)
+        dialog.connect("close-request", self._on_pair_dialog_close_request)
+        dialog.present()
+
+    def _on_pair_dialog_close_request(self, dialog: Gtk.Window) -> bool:
+        if getattr(dialog, "paired", False):
+            self.settings = config.load_config()
+            self._load_settings()
+        return False
+
+
+class PairDialog(Gtk.Window):
+    """Scan for Haylou devices, pick one, name it, save to config."""
+
+    def __init__(self, parent: Gtk.Window):
+        super().__init__(title="Pair a device", transient_for=parent)
+        self.set_modal(True)
+        self.set_default_size(400, 480)
+        self.paired = False
+        self._devices: list[transport.Advertisement] = []
+        self._scanning = False
+        self._auto_name = ""
+
+        box = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=12,
+        )
+        box.set_margin_top(16)
+        box.set_margin_bottom(16)
+        box.set_margin_start(16)
+        box.set_margin_end(16)
+        self.set_child(box)
+
+        self.status_label = Gtk.Label(label="Scanning for Haylou devices...")
+        self.status_label.set_xalign(0)
+        box.append(self.status_label)
+
+        self.spinner = Gtk.Spinner()
+        self.spinner.set_halign(Gtk.Align.CENTER)
+        box.append(self.spinner)
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_vexpand(True)
+        self.listbox = Gtk.ListBox()
+        self.listbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        self.listbox.add_css_class("boxed-list")
+        scrolled.set_child(self.listbox)
+        box.append(scrolled)
+
+        name_row = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=8,
+        )
+        name_label = Gtk.Label(label="Name")
+        name_label.set_xalign(0)
+        name_row.append(name_label)
+
+        self.name_entry = Gtk.Entry()
+        self.name_entry.set_hexpand(True)
+        self.name_entry.set_placeholder_text("Device name")
+        name_row.append(self.name_entry)
+        box.append(name_row)
+
+        self.error_label = Gtk.Label(label="")
+        self.error_label.set_xalign(0)
+        self.error_label.add_css_class("error")
+        self.error_label.set_visible(False)
+        box.append(self.error_label)
+
+        button_row = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=8,
+            halign=Gtk.Align.END,
+        )
+
+        cancel = Gtk.Button(label="Cancel")
+        cancel.connect("clicked", lambda _b: self.close())
+        button_row.append(cancel)
+
+        self.pair_button = Gtk.Button(label="Pair")
+        self.pair_button.add_css_class("suggested-action")
+        self.pair_button.set_sensitive(False)
+        self.pair_button.connect("clicked", self._on_pair_clicked)
+        button_row.append(self.pair_button)
+
+        box.append(button_row)
+
+        self.listbox.connect("row-selected", self._on_row_selected)
+        self._start_scan()
+
+    def _start_scan(self) -> None:
+        if self._scanning:
+            return
+
+        self._scanning = True
+        self._devices = []
+        self._auto_name = ""
+        self._clear_list()
+        self.pair_button.set_sensitive(False)
+        self.error_label.set_visible(False)
+        self.name_entry.set_text("")
+        self.status_label.set_text("Scanning for Haylou devices...")
+        self.spinner.start()
+        self.spinner.set_visible(True)
+
+        thread = threading.Thread(target=self._scan_worker, daemon=True)
+        thread.start()
+
+    def _scan_worker(self) -> None:
+        try:
+            rows = asyncio.run(transport.scan(10.0))
+        except Exception as error:
+            GLib.idle_add(self._on_scan_done, None, str(error))
+            return
+
+        devices = [
+            row for row in rows if transport.looks_like_haylou(row.name)
+        ]
+        GLib.idle_add(self._on_scan_done, devices, None)
+
+    def _on_scan_done(
+        self,
+        devices: list[transport.Advertisement] | None,
+        error: str | None,
+    ) -> bool:
+        self._scanning = False
+        self.spinner.stop()
+        self.spinner.set_visible(False)
+
+        if error is not None:
+            self.status_label.set_text("Scan failed.")
+            self.error_label.set_text(error)
+            self.error_label.set_visible(True)
+            self.pair_button.set_label("Retry")
+            self.pair_button.set_sensitive(True)
+            return False
+
+        self._devices = devices or []
+
+        if not self._devices:
+            self.status_label.set_text("No Haylou devices found.")
+            self.error_label.set_text(
+                "Is the watch advertising? Screen on, off the charger, "
+                "phone Bluetooth off."
+            )
+            self.error_label.set_visible(True)
+            self.pair_button.set_label("Retry")
+            self.pair_button.set_sensitive(True)
+            return False
+
+        self.status_label.set_text("Select your device:")
+        self.pair_button.set_label("Pair")
+
+        for device in self._devices:
+            row = Gtk.ListBoxRow()
+            label = Gtk.Label(
+                label=f"{device.name}  ·  {device.address}  ·  "
+                f"{device.rssi} dBm",
+                xalign=0,
+            )
+            label.set_margin_top(8)
+            label.set_margin_bottom(8)
+            label.set_margin_start(8)
+            label.set_margin_end(8)
+            row.set_child(label)
+            row.device = device
+            self.listbox.append(row)
+
+        return False
+
+    def _clear_list(self) -> None:
+        while (row := self.listbox.get_row_at_index(0)) is not None:
+            self.listbox.remove(row)
+
+    def _on_row_selected(
+        self,
+        _listbox: Gtk.ListBox,
+        row: Gtk.ListBoxRow | None,
+    ) -> None:
+        if row is None:
+            self.pair_button.set_sensitive(False)
+            return
+
+        device = row.device
+        self.pair_button.set_sensitive(True)
+
+        # Prefill unless the user edited the previous auto-filled name.
+        current = self.name_entry.get_text()
+        if not current or current == self._auto_name:
+            self._auto_name = transport.strip_brand(device.name)
+            self.name_entry.set_text(self._auto_name)
+
+    def _on_pair_clicked(self, _button: Gtk.Button) -> None:
+        if self.pair_button.get_label() == "Retry":
+            self.pair_button.set_label("Pair")
+            self._start_scan()
+            return
+
+        row = self.listbox.get_selected_row()
+        if row is None:
+            return
+
+        device = row.device
+        model = transport.strip_brand(device.name)
+        name = self.name_entry.get_text().strip() or model
+
+        try:
+            config.save_paired_device(device.address, model, name)
+        except Exception as error:
+            self.error_label.set_text(f"Could not save device: {error}")
+            self.error_label.set_visible(True)
+            return
+
+        self.paired = True
+        self.close()
 
 
 class HaylouApplication(Gtk.Application):
