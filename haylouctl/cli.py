@@ -1,14 +1,16 @@
 
-"""Command line interface: scan, survey, bridge, gui (prog: haylouctl).
+"""Command line interface: scan, survey, bridge, gui, uninstall (prog: haylouctl).
 
-  scan     list advertising BLE devices sorted by RSSI; marks names that
-           look like a Haylou/Solar.
-  survey   connect to a watch (given MAC or auto-detected), dump the GATT
-           table and classify the layout; exit 2 if unknown.
-  bridge   run the notification daemon — the entry point used by
-           systemd's haylouctl.service. Address resolution order:
-           argument, config devices.last, then a fresh scan.
-  gui      open the GTK4 settings window (needs GTK4 bindings).
+  scan      list advertising BLE devices sorted by RSSI; marks names that
+            look like a Haylou/Solar.
+  survey    connect to a watch (given MAC or auto-detected), dump the GATT
+            table and classify the layout; exit 2 if unknown.
+  bridge    run the notification daemon — the entry point used by
+            systemd's haylouctl.service. Address resolution order:
+            argument, config devices.last, then a fresh scan.
+  gui       open the GTK4 settings window (needs GTK4 bindings).
+  uninstall stop the service and remove every file install.sh created;
+            keeps ~/.config/haylouctl and says so.
 
 bridge argument validation (min-interval >= 0, 0 < reconnect-delay <=
 max-reconnect-delay) happens before anything touches BLE.
@@ -18,9 +20,29 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import shutil
+import subprocess
 import sys
+from pathlib import Path
 
 from . import bridge, config, layout, transport
+
+SERVICE_NAME = "haylouctl.service"
+CONFIG_DIR = Path.home() / ".config" / "haylouctl"
+INSTALL_PATHS = (
+    Path.home() / ".local" / "share" / "haylouctl",
+    Path.home() / ".local" / "bin" / "haylouctl",
+    Path.home() / ".config" / "systemd" / "user" / SERVICE_NAME,
+    Path.home() / ".local" / "share" / "applications" / "haylouctl.desktop",
+    Path.home()
+    / ".local"
+    / "share"
+    / "icons"
+    / "hicolor"
+    / "scalable"
+    / "apps"
+    / "haylouctl.svg",
+)
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
@@ -150,6 +172,63 @@ def cmd_gui(_args: argparse.Namespace) -> int:
     return gui_main()
 
 
+def _systemctl(*arguments: str) -> None:
+    try:
+        subprocess.run(
+            ["systemctl", "--user", *arguments],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def cmd_uninstall(args: argparse.Namespace) -> int:
+    existing = [path for path in INSTALL_PATHS if path.exists() or path.is_symlink()]
+
+    if not existing:
+        print("Nothing to uninstall.")
+        return 0
+
+    if not args.yes:
+        try:
+            answer = input(
+                "Are you sure you want to remove Haylou Control? [y/N] "
+            ).strip().lower()
+        except EOFError:
+            answer = ""
+        if answer not in ("y", "yes"):
+            print("Aborted.")
+            return 1
+
+    _systemctl("disable", "--now", SERVICE_NAME)
+
+    for path in existing:
+        try:
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+        except OSError as error:
+            print(f"could not remove {path}: {error}", file=sys.stderr)
+
+    _systemctl("daemon-reload")
+
+    desktop_db = Path.home() / ".local" / "share" / "applications"
+    if shutil.which("update-desktop-database"):
+        subprocess.run(
+            ["update-desktop-database", str(desktop_db)],
+            capture_output=True,
+            check=False,
+        )
+
+    print("Haylou Control was successfully uninstalled.")
+    print(f"Your configuration was kept at {CONFIG_DIR}/")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="haylouctl")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -211,6 +290,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     gui = sub.add_parser("gui", help="open the GTK desktop interface")
     gui.set_defaults(func=cmd_gui)
+
+    uninstall = sub.add_parser(
+        "uninstall", help="remove haylouctl from the system (keeps config)"
+    )
+    uninstall.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="skip the confirmation prompt",
+    )
+    uninstall.set_defaults(func=cmd_uninstall)
 
     return parser
 
