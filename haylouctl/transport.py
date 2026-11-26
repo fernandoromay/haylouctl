@@ -93,6 +93,22 @@ def looks_like_haylou(name: str) -> bool:
     return any(hint in lowered for hint in NAME_HINTS)
 
 
+def strip_brand(name: str) -> str:
+    """Drop a leading brand prefix from an advertised device name.
+
+    "HAYLOU Solar Plus" -> "Solar Plus". Names without the prefix (or
+    that become empty after stripping it) are returned unchanged.
+    """
+    cleaned = name.strip()
+
+    if cleaned.lower().startswith("haylou"):
+        rest = cleaned[len("haylou") :].strip()
+        if rest:
+            return rest
+
+    return cleaned
+
+
 async def scan(seconds: float = 10.0) -> list[Advertisement]:
     found = await BleakScanner.discover(timeout=seconds, return_adv=True)
     rows: list[Advertisement] = []

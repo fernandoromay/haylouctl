@@ -203,6 +203,22 @@ def save_last_device(address: str) -> None:
     save_config(config)
 
 
+def save_paired_device(address: str, model: str, name: str) -> None:
+    config = load_config()
+    paired = config["devices"]["paired"]
+    entry = {"address": address, "model": model, "name": name}
+
+    for index, device in enumerate(paired):
+        if device["address"] == address:
+            paired[index] = entry
+            break
+    else:
+        paired.append(entry)
+
+    config["devices"]["last"] = address
+    save_config(config)
+
+
 def save_window_geometry(x: int, y: int, width: int, height: int) -> None:
     config = load_config()
     config["window"] = {"x": x, "y": y, "width": width, "height": height}
